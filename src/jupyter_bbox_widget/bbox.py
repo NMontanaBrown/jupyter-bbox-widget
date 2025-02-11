@@ -1,6 +1,8 @@
 from traitlets import Integer, List, Unicode, Bool, Bytes
 import anywidget
 from pathlib import Path
+import io
+
 
 _DEV = False  # switch to False for production
 
@@ -20,8 +22,8 @@ class BBoxWidget(anywidget.AnyWidget):
 
     Parameters
     ----------
-    image: string
-        Path to the image file or image url.
+    image: string or PIL.Image
+        Path to the image file, image url, or PIL Image object.
     classes: list of string
         A list of classes.
     colors: list of string
@@ -43,7 +45,7 @@ class BBoxWidget(anywidget.AnyWidget):
     _esm = ESM
     _css = CSS
 
-    image = Unicode("").tag(sync=True)
+    image = Unicode(allow_none=True).tag(sync=True)
     image_url = Unicode().tag(sync=True)
     image_bytes = Bytes().tag(sync=True)
     classes = List(Unicode).tag(sync=True)
@@ -69,14 +71,26 @@ class BBoxWidget(anywidget.AnyWidget):
     hide_buttons = Bool(False).tag(sync=True)
 
     def __init__(self, **kwargs):
-        super().__init__(**kwargs)
-        self.on_msg(self._handle_custom_msg)
+        # Handle PIL Image input before parent initialization
+        if 'image' in kwargs and hasattr(kwargs['image'], 'format'):
+            image_obj = kwargs.pop('image')
+            super().__init__(**kwargs)
+            self._handle_pil_image(image_obj)
+        else:
+            super().__init__(**kwargs)
+            self.on_msg(self._handle_custom_msg)
         self.submit_callback = None
         self.skip_callback = None
         self._attached_widgets = {}
         self.observe(self._handle_select, names=["selected_index"])
         self.observe(self._handle_image_change, names=["image"])
-        self._handle_image_change({"new": self.image})
+
+    def _handle_pil_image(self, image):
+        """Handle PIL Image input"""
+        buffer = io.BytesIO()
+        image.save(buffer, format='PNG')
+        self.image_bytes = buffer.getvalue()
+        self.image = ''  # Set to empty string since we're using image_bytes
 
     def on_submit(self, function):
         """Specify a function that will be called when the user presses Submit button
@@ -168,7 +182,9 @@ class BBoxWidget(anywidget.AnyWidget):
 
     def _handle_image_change(self, change):
         image_location = change["new"]
+        if not image_location:  # Skip if empty string or None
+            return
         try:
             self.image_bytes = Path(image_location).read_bytes()
-        except (FileNotFoundError, IsADirectoryError, OSError):
-            self.image_url = image_location
+        except Exception as e:
+            print(f"Warning: Could not read image file: {e}")
